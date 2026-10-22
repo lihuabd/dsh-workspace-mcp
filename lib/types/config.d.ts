@@ -4,7 +4,7 @@
  * @module dsh-workspace-mcp/config
  */
 import Schema from '@deepseek-ai/schemastery';
-/** 默认按顺序查找的项目配置文件（相对会话工作目录）。 */
+/** 默认按优先级查找的项目配置文件（相对会话工作目录）：优先 DSH 原生文件，回退到 Claude Code 兼容文件。 */
 export declare const DEFAULT_FILES: string[];
 /** 插件行 `config` 解析后的有效配置。 */
 export interface WorkspaceMcpConfig {
@@ -20,10 +20,17 @@ export interface WorkspaceMcpConfig {
     includeSubagents: boolean;
     /** 项目中的服务器连接失败时，是否让会话创建失败；默认只记录告警。 */
     failOnStartupError: boolean;
+    /** 单台服务器首次连接与工具同步的启动预算（毫秒）；0 表示不限制。 */
+    startupTimeoutMs: number;
     /** 单个 MCP 工具调用与资源请求的默认超时（毫秒）。 */
     toolCallTimeoutMs: number;
-    /** 展开 `${VAR}` 时使用的额外变量，优先级高于进程环境。 */
+    /** 展开 `${VAR}` 时额外提供的变量；始终可见，优先级最高。 */
     env: Record<string, string>;
+    /**
+     * 允许从进程环境展开的变量名模式；空数组表示不继承任何进程变量。
+     * 支持精确名、`PREFIX_*` 前缀与 `*`（放行全部）。
+     */
+    envAllowlist: string[];
 }
 /**
  * 插件配置 schema：由 Cordis 在激活插件行时校验并填充默认值。

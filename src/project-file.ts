@@ -9,35 +9,23 @@
  */
 import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, resolve } from 'node:path'
+import type {
+  Config as McpClientPluginConfig,
+  ReconnectConfig,
+} from '@deepseek-ai/dsh-mcp-client'
 import { expandVariables, type VariableSource } from './env.js'
 
 /** 合法的服务器命名空间（与 dsh-mcp-client 的约束一致）。 */
 const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/
 
-/** stdio 传输的客户端配置。 */
-export interface StdioClientConfig {
-  transport: 'stdio'
-  serverName: string
-  command: string
-  args: string[]
-  env: Record<string, string>
-  cwd: string
-  toolCallTimeoutMs: number
-  failOnStartupError: boolean
-}
+/** stdio 传输的客户端配置（复用官方类型，避免结构漂移）。 */
+export type StdioClientConfig = Extract<McpClientPluginConfig, { transport: 'stdio' }>
 
-/** Streamable HTTP 传输的客户端配置。 */
-export interface HttpMcpClientConfig {
-  transport: 'streamable-http'
-  serverName: string
-  url: string
-  headers: Record<string, string>
-  toolCallTimeoutMs: number
-  failOnStartupError: boolean
-}
+/** Streamable HTTP 传输的客户端配置（复用官方类型）。 */
+export type HttpMcpClientConfig = Extract<McpClientPluginConfig, { transport: 'streamable-http' }>
 
 /** 传给 `@deepseek-ai/dsh-mcp-client` 的单台服务器配置。 */
-export type McpClientConfig = StdioClientConfig | HttpMcpClientConfig
+export type McpClientConfig = McpClientPluginConfig
 
 /** 项目文件里单台服务器的原始声明（未展开变量的形态）。 */
 export interface McpServerDeclaration {
@@ -48,12 +36,24 @@ export interface McpServerDeclaration {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
-  /** stdio 服务器的工作目录，相对项目根目录解析。 */
+  /** stdio 服务器的工作目录，相对配置文件所在目录解析。 */
   cwd?: string
   /** 为 true 时跳过该服务器。 */
   disabled?: boolean
   /** 单台服务器覆盖全局工具调用超时。 */
   toolCallTimeoutMs?: number
+  /** 单台服务器覆盖服务器指令的最大字节数（mcp-client 默认 32768）。 */
+  maxInstructionBytes?: number
+  /** 单台服务器覆盖断线重连策略。 */
+  reconnect?: ReconnectConfig
+}
+
+/** 单台服务器的解析问题；只影响该条目，不影响整份文件。 */
+export interface ProjectFileIssue {
+  /** 项目文件里的原始服务器名。 */
+  server: string
+  /** 可读的失败原因。 */
+  message: string
 }
 
 /** 解析后的项目文件。 */
@@ -62,6 +62,8 @@ export interface ProjectFile {
   file: string
   /** 服务器名 → 声明。 */
   servers: Record<string, McpServerDeclaration>
+  /** 被跳过的服务器条目；其余条目仍然可用。 */
+  issues: ProjectFileIssue[]
 }
 
 /** 项目文件内容不合法时抛出的可诊断错误。 */
@@ -76,6 +78,9 @@ export class ProjectFileError extends Error {
  * 把原始服务器名规范成 dsh-mcp-client 接受、且可安全用作工具名段的 namespace。
  *
  * 合法名原样返回；不合法时做有损规范化并追加 8 位哈希后缀，避免不同名字折叠成同一个。
+ *
+ * 与 ACP 的同名逻辑同源（两处都未导出公共实现），但这里刻意更宽松：先 `trim`，
+ * 空名也会得到稳定的 `server_<hash>`，而不是让整条服务器因命名问题消失。
  *
  * @param name - 项目文件里的服务器名。
  * @returns 长度不超过 32 的合法 namespace。
@@ -93,6 +98,44 @@ export function normalizeServerName(name: string): string {
   return `${base}_${digest}`.slice(0, 32)
 }
 
+/** 命中的项目文件及其所在目录（相对候选路径的解析基准）。 */
+export interface ProjectFileLocation {
+  /** 绝对路径。 */
+  file: string
+  /** 执行查找的目录：会话工作目录或某个父目录。 */
+  directory: string
+}
+
+/**
+ * 在会话工作目录（可选地向父目录）查找第一个存在的项目配置文件，并返回命中目录。
+ *
+ * @param cwd - 会话工作目录，绝对路径。
+ * @param files - 候选相对路径，按优先级排列。
+ * @param maxParentDepth - 向上查找的层数；0 表示只看当前目录。
+ * @param exists - 文件存在性判断，默认 `node:fs` 的实现由调用方注入。
+ * @returns 命中的绝对路径与所在目录，未命中返回 undefined。
+ */
+export function locateProjectFile(
+  cwd: string,
+  files: readonly string[],
+  maxParentDepth: number,
+  exists: (path: string) => boolean,
+): ProjectFileLocation | undefined {
+  const candidates = files.filter((file) => file.trim().length > 0)
+  if (candidates.length === 0) return undefined
+  let directory = resolve(cwd)
+  for (let depth = 0; ; depth += 1) {
+    for (const candidate of candidates) {
+      const file = isAbsolute(candidate) ? candidate : resolve(directory, candidate)
+      if (exists(file)) return { file, directory }
+    }
+    if (depth >= maxParentDepth) return undefined
+    const parent = dirname(directory)
+    if (parent === directory) return undefined
+    directory = parent
+  }
+}
+
 /**
  * 在会话工作目录（可选地向父目录）查找第一个存在的项目配置文件。
  *
@@ -108,30 +151,23 @@ export function findProjectFile(
   maxParentDepth: number,
   exists: (path: string) => boolean,
 ): string | undefined {
-  const candidates = files.filter((file) => file.trim().length > 0)
-  if (candidates.length === 0) return undefined
-  let directory = resolve(cwd)
-  for (let depth = 0; ; depth += 1) {
-    for (const candidate of candidates) {
-      const file = isAbsolute(candidate) ? candidate : resolve(directory, candidate)
-      if (exists(file)) return file
-    }
-    if (depth >= maxParentDepth) return undefined
-    const parent = dirname(directory)
-    if (parent === directory) return undefined
-    directory = parent
-  }
+  return locateProjectFile(cwd, files, maxParentDepth, exists)?.file
 }
 
 /**
  * 解析项目文件文本，校验 `mcpServers` 的结构并归一化字段。
  *
- * @param text - 文件内容。
+ * 文件级问题（不是合法 JSON、顶层结构不对）仍然抛出；单台服务器的字段问题
+ * 只记录到 {@link ProjectFile.issues}，不牵连同文件里的其他服务器。
+ *
+ * @param rawText - 文件内容。
  * @param source - 文件绝对路径，用于错误信息。
- * @returns 服务器名 → 声明。
- * @throws {ProjectFileError} 内容不是合法 JSON 或结构不符合约定。
+ * @returns 服务器名 → 声明，以及被跳过的条目。
+ * @throws {ProjectFileError} 内容不是合法 JSON 或文件级结构不符合约定。
  */
-export function parseProjectFile(text: string, source: string): ProjectFile {
+export function parseProjectFile(rawText: string, source: string): ProjectFile {
+  // Windows 编辑器常写入 UTF-8 BOM，JSON.parse 不接受；只在开头去掉一个。
+  const text = rawText.charCodeAt(0) === 0xfeff ? rawText.slice(1) : rawText
   let data: unknown
   try {
     data = JSON.parse(text)
@@ -140,15 +176,28 @@ export function parseProjectFile(text: string, source: string): ProjectFile {
   }
   if (!isPlainObject(data)) throw new ProjectFileError(`${source} 的顶层必须是 JSON 对象`)
   const rawServers = data.mcpServers
-  if (rawServers === undefined) return { file: source, servers: {} }
+  if (rawServers === undefined) return { file: source, servers: {}, issues: [] }
   if (!isPlainObject(rawServers)) throw new ProjectFileError(`${source} 的 mcpServers 必须是对象`)
 
   const servers: Record<string, McpServerDeclaration> = {}
+  const issues: ProjectFileIssue[] = []
   for (const [name, raw] of Object.entries(rawServers)) {
-    if (!isPlainObject(raw)) throw new ProjectFileError(`${source} 的 mcpServers.${name} 必须是对象`)
-    servers[name] = normalizeDeclaration(name, raw, source)
+    if (!isPlainObject(raw)) {
+      issues.push({ server: name, message: `${source} 的 mcpServers.${name} 必须是对象` })
+      continue
+    }
+    // 被禁用的服务器不会被启动，因此不再校验其余字段。
+    if (raw.disabled === true) {
+      setOwn(servers, name, { disabled: true })
+      continue
+    }
+    try {
+      setOwn(servers, name, normalizeDeclaration(name, raw, source))
+    } catch (error) {
+      issues.push({ server: name, message: describeError(error) })
+    }
   }
-  return { file: source, servers }
+  return { file: source, servers, issues }
 }
 
 /**
@@ -156,7 +205,7 @@ export function parseProjectFile(text: string, source: string): ProjectFile {
  *
  * @param name - 原始服务器名。
  * @param declaration - 已归一化的声明。
- * @param projectRoot - 项目根目录（会话工作目录），用作 stdio 的默认 cwd。
+ * @param projectRoot - 配置文件所在目录，用作 stdio 的默认 cwd 与相对路径基准。
  * @param options - 变量来源与默认值覆盖。
  * @returns 可直接传给 mcp-client 插件的配置对象。
  * @throws {ProjectFileError} 声明缺少必要字段或使用了不支持的传输。
@@ -169,12 +218,21 @@ export function toClientConfig(
     variables: VariableSource
     failOnStartupError: boolean
     toolCallTimeoutMs: number
+    /** 变量缺失回调：用于区分「不存在」与「存在但被环境放行策略拦下」。 */
+    onMissingEnv?: (name: string) => void
   },
 ): McpClientConfig {
-  const expand = (value: string): string => expandVariables(value, options.variables)
+  const expand = (value: string): string =>
+    expandVariables(value, options.variables, options.onMissingEnv)
   const serverName = normalizeServerName(name)
   const timeout = declaration.toolCallTimeoutMs ?? options.toolCallTimeoutMs
   const transport = resolveTransport(name, declaration)
+  const overrides = {
+    ...(declaration.maxInstructionBytes === undefined
+      ? {}
+      : { maxInstructionBytes: declaration.maxInstructionBytes }),
+    ...(declaration.reconnect === undefined ? {} : { reconnect: declaration.reconnect }),
+  }
 
   if (transport === 'stdio') {
     const command = declaration.command
@@ -195,6 +253,7 @@ export function toClientConfig(
             : resolve(projectRoot, declaration.cwd),
       toolCallTimeoutMs: timeout,
       failOnStartupError: options.failOnStartupError,
+      ...overrides,
     }
   }
 
@@ -211,6 +270,7 @@ export function toClientConfig(
     headers: expandRecord(declaration.headers, expand),
     toolCallTimeoutMs: timeout,
     failOnStartupError: options.failOnStartupError,
+    ...overrides,
   }
 }
 
@@ -306,7 +366,48 @@ function normalizeDeclaration(
     }
     declaration.toolCallTimeoutMs = raw.toolCallTimeoutMs
   }
+  if (raw.maxInstructionBytes !== undefined) {
+    if (
+      typeof raw.maxInstructionBytes !== 'number' ||
+      !Number.isSafeInteger(raw.maxInstructionBytes) ||
+      raw.maxInstructionBytes <= 0
+    ) {
+      throw error('maxInstructionBytes', '正整数')
+    }
+    declaration.maxInstructionBytes = raw.maxInstructionBytes
+  }
+  if (raw.reconnect !== undefined) {
+    if (!isPlainObject(raw.reconnect)) throw error('reconnect', '对象')
+    declaration.reconnect = normalizeReconnect(name, raw.reconnect, source)
+  }
   return declaration
+}
+
+/** 收窄 `reconnect` 的字段；未知字段保持忽略，与顶层字段的处理一致。 */
+function normalizeReconnect(
+  name: string,
+  raw: Record<string, unknown>,
+  source: string,
+): ReconnectConfig {
+  const fail = (field: string, expected: string): ProjectFileError =>
+    new ProjectFileError(`${source} 的 mcpServers.${name}.reconnect.${field} 必须是${expected}`)
+  const positive = (field: string): number => {
+    const value = raw[field]
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+      throw fail(field, '正整数')
+    }
+    return value
+  }
+
+  const reconnect: ReconnectConfig = {}
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') throw fail('enabled', '布尔值')
+    reconnect.enabled = raw.enabled
+  }
+  if (raw.initialDelayMs !== undefined) reconnect.initialDelayMs = positive('initialDelayMs')
+  if (raw.maxDelayMs !== undefined) reconnect.maxDelayMs = positive('maxDelayMs')
+  if (raw.maxAttempts !== undefined) reconnect.maxAttempts = positive('maxAttempts')
+  return reconnect
 }
 
 /** 校验并复制一个字符串字典字段。 */
@@ -324,12 +425,34 @@ function stringRecord(
     if (typeof entry !== 'string') {
       throw new ProjectFileError(`${source} 的 mcpServers.${name}.${field}.${key} 必须是字符串`)
     }
-    result[key] = entry
+    setOwn(result, key, entry)
   }
   return result
+}
+
+/**
+ * 以自有数据属性写入。
+ *
+ * 直接 `record[key] = value` 在 key 为 `__proto__` 时会触发原型 setter：
+ * 字符串值被丢弃、对象值会改写整个记录的原型。环境变量与 header 允许
+ * `__proto__` 这个名字，因此这里显式定义为数据属性。
+ */
+function setOwn<T>(record: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(record, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
 }
 
 /** 判断一个 JSON 值是否为普通对象（排除数组与 null）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** 把任意错误值转成一行可读文本。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
 }

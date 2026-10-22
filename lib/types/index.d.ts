@@ -12,9 +12,11 @@ import { Config, type WorkspaceMcpConfig } from './config.js';
 export { Config };
 export type { WorkspaceMcpConfig };
 export { DEFAULT_FILES } from './config.js';
+export { matchesEnvPattern } from './env.js';
+export type { VariableSource } from './env.js';
 export { normalizeServerName, parseProjectFile, ProjectFileError } from './project-file.js';
-export type { McpClientConfig, McpServerDeclaration } from './project-file.js';
-export { mountProjectServers } from './mount.js';
+export type { McpClientConfig, McpServerDeclaration, ProjectFileIssue } from './project-file.js';
+export { MAX_PROJECT_FILE_BYTES, mountProjectServers, StartupTimeoutError } from './mount.js';
 export type { MountFailure, MountHost, MountIo, MountResult } from './mount.js';
 /** Cordis 插件名，用于 Loader 诊断。 */
 export declare const name = "workspace-mcp";

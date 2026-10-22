@@ -16,9 +16,11 @@ import { mountProjectServers } from './mount.js'
 export { Config }
 export type { WorkspaceMcpConfig }
 export { DEFAULT_FILES } from './config.js'
+export { matchesEnvPattern } from './env.js'
+export type { VariableSource } from './env.js'
 export { normalizeServerName, parseProjectFile, ProjectFileError } from './project-file.js'
-export type { McpClientConfig, McpServerDeclaration } from './project-file.js'
-export { mountProjectServers } from './mount.js'
+export type { McpClientConfig, McpServerDeclaration, ProjectFileIssue } from './project-file.js'
+export { MAX_PROJECT_FILE_BYTES, mountProjectServers, StartupTimeoutError } from './mount.js'
 export type { MountFailure, MountHost, MountIo, MountResult } from './mount.js'
 
 /** Cordis 插件名，用于 Loader 诊断。 */
@@ -46,21 +48,34 @@ export function apply(ctx: Context, config: WorkspaceMcpConfig): void {
   ctx.on('agent/created', async ({ agent }) => {
     const fibers: Fiber[] = []
     mounted.set(agent, fibers)
-    await mountProjectServers(agent.session, config, {
-      plugin: async (clientConfig) => {
-        const fiber = await agent.ctx.plugin(McpClient, clientConfig)
-        fibers.push(fiber)
-        return fiber
-      },
-      log: (level, message) => {
-        // 组合里没有 logger 服务时静默降级，日志问题不应影响挂载。
-        ctx.logger?.[level]?.(message)
-      },
-    })
+    try {
+      await mountProjectServers(agent.session, config, {
+        plugin: async (clientConfig) => {
+          // 同步登记 fiber：即使挂载还没结算插件就被卸载，清理也能覆盖到这次连接。
+          const fiber = agent.ctx.plugin(McpClient, clientConfig)
+          fibers.push(fiber)
+          return fiber
+        },
+        log: (level, message) => {
+          // 组合里没有 logger 服务时静默降级，日志问题不应影响挂载。
+          ctx.logger?.[level]?.(message)
+        },
+      })
+    } catch (error) {
+      // 只有显式打开 failOnStartupError 才允许让会话创建失败；其余异常兜底成告警。
+      if (config.failOnStartupError) throw error
+      ctx.logger?.warn?.(`workspace-mcp: unexpected mount failure: ${describeError(error)}`)
+    }
   })
 
   // agent 销毁后丢弃记录，避免长期运行时无限增长。
   ctx.on('agent/disposed', ({ agent }) => {
     mounted.delete(agent)
   })
+}
+
+/** 把任意错误值转成一行可读文本。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
 }

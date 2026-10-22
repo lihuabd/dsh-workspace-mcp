@@ -32,25 +32,44 @@ function config(overrides = {}) {
     maxParentDepth: 3,
     includeSubagents: false,
     failOnStartupError: false,
+    startupTimeoutMs: 20000,
     toolCallTimeoutMs: 60000,
     env: {},
+    envAllowlist: [],
     ...overrides,
   }
 }
 
-/** 构造一个记录挂载调用、可手动释放的 agent 作用域。 */
+/**
+ * 构造一个记录挂载调用、可手动释放的 agent 作用域。
+ *
+ * `ctx.plugin` 返回的对象模仿 Cordis 的 `Fiber & PromiseLike<Fiber>`：既同步可登记，
+ * 又能在 await 时结算（或按 `options.fail` 拒绝）。
+ */
 function fakeAgent(dir, options = {}) {
   const calls = []
   const disposed = []
   const agent = {
     session: { header: { cwd: dir, ...(options.header ?? {}) } },
     ctx: {
-      plugin: async (mounted, clientConfig) => {
+      plugin: (mounted, clientConfig) => {
         calls.push(clientConfig)
-        if (options.fail) throw new Error('mcp down')
-        return {
+        // await 必须结算到「非 thenable」的目标，否则会无限自我采纳。
+        const target = {
           dispose: async () => {
             disposed.push(clientConfig.serverName)
+          },
+        }
+        return {
+          ...target,
+          then: (onFulfilled, onRejected) => {
+            const settle = new Promise((resolve, reject) => {
+              setTimeout(() => {
+                if (options.fail) reject(new Error('mcp down'))
+                else resolve(target)
+              }, options.delayMs ?? 0)
+            })
+            return settle.then(onFulfilled, onRejected)
           },
         }
       },
@@ -70,8 +89,8 @@ describe('plugin entry', () => {
     const fiber = await ctx.plugin(plugin, config())
     const { agent, calls } = fakeAgent(dir)
 
-    ctx.emit('agent/created', { agent })
-    await tick()
+    // 用 serial 而不是 emit：真实链路会在释放首轮工作前等待监听器结算。
+    await ctx.serial('agent/created', { agent })
 
     assert.equal(calls.length, 1)
     assert.equal(calls[0].serverName, 'demo')
@@ -114,11 +133,33 @@ describe('plugin entry', () => {
     const fiber = await ctx.plugin(plugin, config())
     const { agent } = fakeAgent(dir, { fail: true })
 
-    // 监听器内部吞掉挂载错误，因此同步 emit 不应抛出。
-    assert.doesNotThrow(() => {
-      ctx.emit('agent/created', { agent })
-    })
-    await tick()
+    // 默认 failOnStartupError 为 false：监听器吞掉挂载错误，创建派发正常结算。
+    await assert.doesNotReject(() => ctx.serial('agent/created', { agent }))
     await fiber.dispose()
+  })
+
+  it('failOnStartupError 为 true 时让创建派发失败', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { demo: { command: 'x' } } }))
+    const ctx = new Context()
+    const fiber = await ctx.plugin(plugin, config({ failOnStartupError: true }))
+    const { agent } = fakeAgent(dir, { fail: true })
+
+    await assert.rejects(() => ctx.serial('agent/created', { agent }), /failed to start/)
+    await fiber.dispose()
+  })
+
+  it('挂载进行中卸载插件也会释放后创建的连接', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { demo: { command: 'x' } } }))
+    const ctx = new Context()
+    const fiber = await ctx.plugin(plugin, config())
+    const { agent, disposed } = fakeAgent(dir, { delayMs: 50 })
+
+    // emit 会同步跑到 agent.ctx.plugin：fiber 在结算前就已登记。
+    ctx.emit('agent/created', { agent })
+    await fiber.dispose()
+
+    assert.deepEqual(disposed, ['demo'])
   })
 })

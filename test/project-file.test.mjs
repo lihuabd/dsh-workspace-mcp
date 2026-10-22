@@ -3,9 +3,10 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
-import { expandVariables } from '../lib/env.js'
+import { expandVariables, matchesEnvPattern } from '../lib/env.js'
 import {
   findProjectFile,
+  locateProjectFile,
   normalizeServerName,
   parseProjectFile,
   ProjectFileError,
@@ -43,6 +44,22 @@ describe('expandVariables', () => {
 
   it('保留不认识的写法', () => {
     assert.equal(expandVariables('${1BAD} $PLAIN', {}), '${1BAD} $PLAIN')
+  })
+
+  it('未定义变量回调告知变量名', () => {
+    const missing = []
+    expandVariables('${A}/${B}', { A: 'x' }, (name) => missing.push(name))
+    assert.deepEqual(missing, ['B'])
+  })
+})
+
+describe('matchesEnvPattern', () => {
+  it('精确名、前缀与通配', () => {
+    assert.ok(matchesEnvPattern('TOKEN', 'TOKEN'))
+    assert.ok(!matchesEnvPattern('TOKEN', 'TOKEN_2'))
+    assert.ok(matchesEnvPattern('MCP_*', 'MCP_SERVER_TOKEN'))
+    assert.ok(!matchesEnvPattern('MCP_*', 'AWS_SECRET_ACCESS_KEY'))
+    assert.ok(matchesEnvPattern('*', 'AWS_SECRET_ACCESS_KEY'))
   })
 })
 
@@ -86,6 +103,13 @@ describe('parseProjectFile', () => {
     assert.deepEqual(parseProjectFile('{}', '/tmp/.mcp.json').servers, {})
   })
 
+  it('接受带 UTF-8 BOM 的文件', () => {
+    const text = '\uFEFF' + JSON.stringify({ mcpServers: { local: { command: 'node' } } })
+    const file = parseProjectFile(text, '/tmp/.mcp.json')
+    assert.deepEqual(Object.keys(file.servers), ['local'])
+    assert.deepEqual(file.issues, [])
+  })
+
   it('非法 JSON 抛出 ProjectFileError', () => {
     assert.throws(() => parseProjectFile('{', '/tmp/.mcp.json'), ProjectFileError)
   })
@@ -94,11 +118,44 @@ describe('parseProjectFile', () => {
     assert.throws(() => parseProjectFile('{"mcpServers": []}', '/tmp/.mcp.json'), ProjectFileError)
   })
 
-  it('args 里有非字符串时抛出', () => {
-    assert.throws(
-      () => parseProjectFile('{"mcpServers":{"x":{"command":"n","args":[1]}}}', '/tmp/.mcp.json'),
-      ProjectFileError,
+  it('单个服务器字段不合法时只跳过该条目', () => {
+    const file = parseProjectFile(
+      JSON.stringify({
+        mcpServers: {
+          good: { command: 'node' },
+          bad: { command: 'node', args: [1] },
+        },
+      }),
+      '/tmp/.mcp.json',
     )
+    assert.deepEqual(Object.keys(file.servers), ['good'])
+    assert.equal(file.issues.length, 1)
+    assert.equal(file.issues[0].server, 'bad')
+    assert.match(file.issues[0].message, /args/)
+  })
+
+  it('disabled 的服务器不校验其余字段', () => {
+    const file = parseProjectFile(
+      JSON.stringify({
+        mcpServers: { off: { command: 'node', args: [1], disabled: true } },
+      }),
+      '/tmp/.mcp.json',
+    )
+    assert.equal(file.servers.off.disabled, true)
+    assert.deepEqual(file.issues, [])
+  })
+
+  it('保留 __proto__ 服务器名与 env 键，不污染原型', () => {
+    const file = parseProjectFile(
+      '{"mcpServers":{"__proto__":{"command":"evil"},"ok":{"command":"node","env":{"__proto__":"x"}}}}',
+      '/tmp/.mcp.json',
+    )
+
+    assert.deepEqual(Object.keys(file.servers), ['__proto__', 'ok'])
+    assert.equal(Object.getPrototypeOf(file.servers), Object.prototype)
+    assert.equal(file.servers['__proto__'].command, 'evil')
+    assert.deepEqual(Object.keys(file.servers.ok.env), ['__proto__'])
+    assert.equal(file.servers.ok.env['__proto__'], 'x')
   })
 })
 
@@ -153,6 +210,29 @@ describe('toClientConfig', () => {
       ProjectFileError,
     )
   })
+
+  it('透传 maxInstructionBytes 与 reconnect', () => {
+    const config = toClientConfig(
+      'local',
+      { command: 'node', maxInstructionBytes: 1024, reconnect: { enabled: false, maxAttempts: 3 } },
+      '/repo',
+      options,
+    )
+    assert.equal(config.maxInstructionBytes, 1024)
+    assert.deepEqual(config.reconnect, { enabled: false, maxAttempts: 3 })
+  })
+
+  it('把未命中的变量名交给回调', () => {
+    const missing = []
+    const config = toClientConfig(
+      'local',
+      { command: 'node', env: { T: '${BLOCKED}' } },
+      '/repo',
+      { ...options, variables: {}, onMissingEnv: (name) => missing.push(name) },
+    )
+    assert.equal(config.env.T, '')
+    assert.deepEqual(missing, ['BLOCKED'])
+  })
 })
 
 describe('findProjectFile', () => {
@@ -174,5 +254,18 @@ describe('findProjectFile', () => {
 
   it('到达文件系统根后停止', () => {
     assert.equal(findProjectFile('/', ['.never-exists-xyz'], 8, existsSync), undefined)
+  })
+
+  it('locateProjectFile 返回命中目录，供同目录候选告警使用', () => {
+    const root = tempDir()
+    const child = join(root, 'nested')
+    mkdirSync(join(root, '.dsh'), { recursive: true })
+    mkdirSync(child)
+    writeFileSync(join(root, '.dsh/mcp.json'), '{}')
+
+    assert.equal(locateProjectFile(child, ['.dsh/mcp.json'], 0, existsSync), undefined)
+    const hit = locateProjectFile(child, ['.dsh/mcp.json'], 1, existsSync)
+    assert.equal(hit.file, join(root, '.dsh/mcp.json'))
+    assert.equal(hit.directory, root)
   })
 })
