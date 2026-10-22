@@ -1,0 +1,8 @@
+node_modules/
+.verify/
+.cache/
+.pnpm-store/
+*.tsbuildinfo
+.DS_Store
+*.tgz
+site/

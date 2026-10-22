@@ -1,0 +1,90 @@
+{
+  "name": "dsh-workspace-mcp",
+  "version": "0.1.0",
+  "description": "Project-level MCP servers for DeepSeek Harness: read .mcp.json from the session workspace and mount its servers into each agent.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "mcp",
+    "model-context-protocol",
+    "plugin"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "author": "lihuabd",
+  "homepage": "https://github.com/lihuabd/dsh-workspace-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lihuabd/dsh-workspace-mcp.git"
+  },
+  "icon": "./icon.svg",
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.1.7-0 <0.3.0"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": ">=0.1.7-0 <0.3.0",
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.7-0 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.1.7-0 <0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-plugin-market-index": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "market:index": "node scripts/build-market-index.mjs --output site/index.json",
+    "market:index:local": "node scripts/build-market-index.mjs --local --output site/index.json",
+    "prepublishOnly": "npm run build"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

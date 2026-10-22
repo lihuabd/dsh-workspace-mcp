@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Project MCP",
+    "description": "Mount the MCP servers declared in the workspace's .mcp.json into every session that starts there."
+  }
+}

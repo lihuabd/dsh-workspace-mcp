@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "项目级 MCP",
+    "description": "把工作区 .mcp.json 里声明的 MCP 服务器挂载到在该目录启动的每个会话。"
+  }
+}

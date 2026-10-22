@@ -1,0 +1,61 @@
+name: Release
+
+# 打 tag（v0.1.0）时：校验版本号 → 发 npm → 生成插件市场索引 → 发布到 GitHub Pages。
+# 需要在仓库 Secrets 里配置 NPM_TOKEN，并在 Settings → Pages 选择 “GitHub Actions”。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      # lib/ 是提交进仓库的产物，构建后必须与源码一致
+      - run: git diff --exit-code -- lib
+      - run: node --test test/*.test.mjs
+
+      # tag 必须与 package.json 版本一致，避免发出与 tag 不符的包
+      - name: Check tag matches package version
+        run: node -e "const v=require('./package.json').version; if ('v'+v!==process.env.GITHUB_REF_NAME) { console.error('tag '+process.env.GITHUB_REF_NAME+' != v'+v); process.exit(1) }"
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Build market index
+        run: pnpm market:index --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.json"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "demo-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DEMO_MCP_TOKEN}"
+      }
+    },
+    "demo-stdio": {
+      "command": "node",
+      "args": ["./tools/demo-mcp-server.js"],
+      "env": {
+        "DEMO_TOKEN": "${DEMO_MCP_TOKEN}"
+      }
+    }
+  }
+}

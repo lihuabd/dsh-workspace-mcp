@@ -1,0 +1,10 @@
+# dsh-workspace-mcp 的 bundle 层。
+#
+# 安装为 bundle 后，Plugin Manager 会把这一行并入 profile；也可以手动把同样的
+# 条目写进 profile 的 cordis.patch.yml。需要改配置时按 id 覆盖 `config`
+# （Cordis patch 会整段替换匹配条目的 config，因此要写全所有想保留的字段）。
+- insert:
+    - id: workspace-mcp
+      name: dsh-workspace-mcp
+      config:
+        enabled: true
