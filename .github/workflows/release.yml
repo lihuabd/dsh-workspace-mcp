@@ -5,6 +5,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # 允许在 Actions 页手动重跑，不必反复删/建 tag（例如换过 NPM_TOKEN 之后）
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,9 +43,18 @@ jobs:
       - run: git diff --exit-code -- lib
       - run: node --test test/*.test.mjs
 
-      # tag 必须与 package.json 版本一致，避免发出与 tag 不符的包
+      # tag 必须与 package.json 版本一致，避免发出与 tag 不符的包；手动触发时跳过
       - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
         run: node -e "const v=require('./package.json').version; if ('v'+v!==process.env.GITHUB_REF_NAME) { console.error('tag '+process.env.GITHUB_REF_NAME+' != v'+v); process.exit(1) }"
+
+      - name: npm auth diagnostics
+        run: |
+          echo "NPM_TOKEN present: ${{ secrets.NPM_TOKEN != '' }}"
+          node -v
+          npm -v
+          npm config get registry
+          npm whoami --registry https://registry.npmjs.org/ || echo "whoami failed (granular tokens often 403 here; publish can still work)"
 
       - name: Publish to npm
         run: |
