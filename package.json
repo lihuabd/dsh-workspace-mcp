@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Project-level MCP servers for DeepSeek Harness: read .dsh/mcp.json (or .mcp.json) from the session workspace and mount its servers into each agent.",
   "keywords": [
     "dsh",

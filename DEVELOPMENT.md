@@ -91,7 +91,7 @@ pnpm market:index:local
 
 1. 仓库 Secrets 添加 `NPM_TOKEN`（npm Automation token）；
 2. Settings → Pages → Source 选 **GitHub Actions**；
-3. `git tag v0.2.0 && git push origin v0.2.0`。
+3. `git tag v0.2.1 && git push origin v0.2.1`。
 
 > `npm publish --provenance` 要求 `package.json` 的 `repository` 指向当前公开仓库；没填就先把工作流里的 `--provenance` 去掉，或补上仓库地址后再发。
 

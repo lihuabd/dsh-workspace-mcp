@@ -1,6 +1,6 @@
 name: Release
 
-# 打 tag（v0.1.0）时：校验版本号 → 发 npm → 生成插件市场索引 → 发布到 GitHub Pages。
+# 打 tag（v*，如 v0.2.1）时：校验版本号 → 发 npm → 生成插件市场索引 → 发布到 GitHub Pages。
 # 需要在仓库 Secrets 里配置 NPM_TOKEN，并在 Settings → Pages 选择 “GitHub Actions”。
 on:
   push:
