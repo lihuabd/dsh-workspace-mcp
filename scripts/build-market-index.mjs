@@ -65,16 +65,20 @@ function parseArgs(argv) {
 async function fetchRegistry(registry, name) {
   const url = new URL(encodeURIComponent(name), registry)
   let lastError
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  // 发布成功后 registry 的读接口通常有几秒到几十秒的传播延迟，404 也要继续等到超时。
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     try {
       const response = await fetch(url, { headers: { accept: 'application/json' } })
       if (response.ok) return await response.json()
       lastError = new Error(`GET ${url} -> ${response.status}`)
-      if (response.status === 404) break
     } catch (error) {
       lastError = error
     }
-    await new Promise((done) => setTimeout(done, 2000 * (attempt + 1)))
+    if (attempt < 11) {
+      const delay = Math.min(2000 * (attempt + 1), 10000)
+      console.error(`registry not ready (${lastError instanceof Error ? lastError.message : lastError}), retrying in ${delay}ms`)
+      await new Promise((done) => setTimeout(done, delay))
+    }
   }
   throw lastError ?? new Error(`无法读取 ${url}`)
 }

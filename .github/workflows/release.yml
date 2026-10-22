@@ -63,8 +63,20 @@ jobs:
           if npm view "${name}@${version}" version --registry https://registry.npmjs.org/ >/dev/null 2>&1; then
             echo "${name}@${version} already published, skipping"
           else
-            npm publish --provenance --access public
+            echo "publishing ${name}@${version}"
+            npm publish --provenance --access public --registry https://registry.npmjs.org/
           fi
+          # 发布后确认版本真的可读：registry 有传播延迟，若始终不可见则让这一步失败
+          for i in $(seq 1 12); do
+            if npm view "${name}@${version}" version --registry https://registry.npmjs.org/ >/dev/null 2>&1; then
+              echo "verified ${name}@${version}"
+              exit 0
+            fi
+            echo "waiting for registry to expose ${name}@${version} (${i}/12)"
+            sleep 5
+          done
+          echo "${name}@${version} is not visible on the registry after publish" >&2
+          exit 1
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
