@@ -18,6 +18,8 @@ dsh plugin --profile <profile> add github:lihuabd/dsh-workspace-mcp
 
 也可以使用桌面 GUI 的插件页或 Creator 模式里的 `plugin_manager`（`action: install_bundle`，`target` 指向包目录 / 包名）。
 
+插件市场索引（在 DSH 插件页「发现」里添加为索引源）：<https://lihuabd.github.io/dsh-workspace-mcp/index.json>
+
 安装后确认条目已进入配置树：
 
 ```sh
