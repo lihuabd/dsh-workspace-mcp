@@ -21,4 +21,6 @@ jobs:
       - run: pnpm build
       # lib/ 是提交进仓库的产物，构建后必须与源码一致
       - run: git diff --exit-code -- lib
+      # 发布前校验实际打包清单包含 patch/locale/icon/运行时
+      - run: pnpm verify:pack
       - run: node --test test/*.test.mjs

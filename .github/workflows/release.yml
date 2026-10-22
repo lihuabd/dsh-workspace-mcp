@@ -40,6 +40,8 @@ jobs:
       - run: pnpm build
       # lib/ 是提交进仓库的产物，构建后必须与源码一致
       - run: git diff --exit-code -- lib
+      # 发布前校验实际打包清单包含 patch/locale/icon/运行时
+      - run: pnpm verify:pack
       - run: node --test test/*.test.mjs
 
       # tag 必须与 package.json 版本一致，避免发出与 tag 不符的包；手动触发时跳过
